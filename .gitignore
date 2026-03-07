@@ -1,0 +1,34 @@
+# Agent build
+agent/build/
+agent/injector/build/
+
+# Rust server build
+server/target/
+
+# Cargo local config (contains machine-specific target-dir path)
+server/.cargo/config.toml
+
+# Claude Code local settings
+.claude/
+
+# Bytecode dumps from device
+bytecode_dump/
+
+# DEX patch debug artifact (contains machine-generated paths)
+server/patch_debug.dex
+
+# OS
+.DS_Store
+Thumbs.db
+
+#
+.lock
+.bin
+.so
+problems-report.html
+
+# Local settings file (contains machine-specific config)
+*.ini
+
+# Personal server config (startup commands, local package names)
+server/dexbgd.toml
