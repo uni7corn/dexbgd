@@ -4893,6 +4893,22 @@ impl App {
             }
         }
 
+        // wai - where am i? print current class.method in JADX dot notation
+        if input == "wai" {
+            match (&self.current_class, &self.current_method) {
+                (Some(cls), Some(method)) => {
+                    // Convert JNI sig "Lsg/vantagepoint/a;" -> "sg.vantagepoint.a"
+                    let dot = cls
+                        .strip_prefix('L').unwrap_or(cls)
+                        .strip_suffix(';').unwrap_or(cls)
+                        .replace('/', ".");
+                    self.log_info(&format!("{}.{}", dot, method));
+                }
+                _ => self.log_info("Not stopped in any method"),
+            }
+            return;
+        }
+
         // Gate release: set BP on GateWait.gateReleased then delete the gate file
         if input == "gate" {
             if self.state == AppState::Disconnected {
@@ -5797,6 +5813,7 @@ impl App {
         self.log_info("  r / regs        - Dump all register values to log");
         self.log_info("  r v4            - Read register v4 to log");
         self.log_info("  r <name>        - Read local variable by name to log");
+        self.log_info("  wai             - Where am I? Print current class.method (JADX notation)");
         self.log_info("  stack           - Show call stack");
         self.log_info("  inspect <slot>  - Inspect object at slot (e.g. inspect 3 or inspect v3)");
         self.log_info("  eval <expr>     - Eval: v3.getAlgorithm(), v5.length");
