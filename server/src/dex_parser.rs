@@ -486,16 +486,28 @@ pub fn extract_dex_from_apk(apk_data: &[u8]) -> Vec<Vec<u8>> {
             ""
         };
 
-        if is_dex_entry(name) && compression == 0 {
-            // Stored DEX: jump to local file header, read past its variable fields,
-            // then grab exactly comp_size bytes of uncompressed data.
+        if is_dex_entry(name) && (compression == 0 || compression == 8) {
+            // Jump to local file header, read past its variable fields.
             if local_offset + 30 <= n {
                 let local_name_len  = read_u16(apk_data, local_offset + 26) as usize;
                 let local_extra_len = read_u16(apk_data, local_offset + 28) as usize;
                 let data_start = local_offset + 30 + local_name_len + local_extra_len;
                 let data_end   = data_start + comp_size;
                 if data_end <= n {
-                    dex_files.push(apk_data[data_start..data_end].to_vec());
+                    if compression == 0 {
+                        // Stored: grab raw bytes directly.
+                        dex_files.push(apk_data[data_start..data_end].to_vec());
+                    } else {
+                        // Deflated (apktool-rebuilt APKs): decompress.
+                        use std::io::Read as _;
+                        let mut decoder = flate2::read::DeflateDecoder::new(
+                            &apk_data[data_start..data_end]
+                        );
+                        let mut out = Vec::new();
+                        if decoder.read_to_end(&mut out).is_ok() {
+                            dex_files.push(out);
+                        }
+                    }
                 }
             }
         }
