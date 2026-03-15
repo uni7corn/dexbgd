@@ -2282,6 +2282,34 @@ impl App {
                                 items.push("─────────────".into());
                                 items.push("  Patch method ".into());
                             }
+                            // Jump flip: offer only the opposite of the current branch state
+                            if self.state == AppState::Suspended {
+                                if let Some(instr) = self.bytecodes.get(bc_idx) {
+                                    let at_pc = self.current_loc
+                                        .map(|loc| loc as u32 == instr.offset)
+                                        .unwrap_or(false);
+                                    if at_pc {
+                                        if let Some((slot, _, _, ref target)) = parse_cond_jump(&instr.text) {
+                                            let currently_taken = instr.branch.as_ref().and_then(|meta| {
+                                                disassembler::eval_branch(meta, &|reg| {
+                                                    self.regs.iter().find(|r| r.slot == reg as i32).map(|r| r.value)
+                                                })
+                                            });
+                                            items.push("─────────────".into());
+                                            match currently_taken {
+                                                Some(true)  => items.push("  Jump not taken   ".into()),
+                                                Some(false) => items.push(format!("  Jump taken  >{}", target)),
+                                                None => {
+                                                    // regs not yet available — show both
+                                                    items.push(format!("  Jump taken  >{}", target));
+                                                    items.push("  Jump not taken   ".into());
+                                                }
+                                            }
+                                            let _ = slot; // used in handler
+                                        }
+                                    }
+                                }
+                            }
                             // Show "Jump to PC" when user has scrolled away from current PC
                             if self.current_loc.is_some() && !self.bytecodes_auto_scroll {
                                 let pc_visible = self.current_loc
@@ -3083,6 +3111,20 @@ impl App {
             "Return true"  => self.execute_command("fr true"),
             "Return false" => self.execute_command("fr false"),
             "Patch method" => self.open_patch_submenu(),
+            l if l.starts_with("Jump taken") || l == "Jump not taken" => {
+                let taken = l.starts_with("Jump taken");
+                if let Some(instr) = self.bytecodes.get(menu.line_idx) {
+                    if let Some((slot, taken_val, not_taken_val, _)) = parse_cond_jump(&instr.text) {
+                        let value = if taken { taken_val } else { not_taken_val };
+                        self.send_command(OutboundCommand::SetLocal { slot, value });
+                        self.send_command(OutboundCommand::Regs {});
+                        self.log_info(&format!(
+                            "Set v{} = {} => jump {}",
+                            slot, value, if taken { "taken" } else { "not taken" }
+                        ));
+                    }
+                }
+            }
             "Jump to PC"   => self.jump_to_pc(),
             l if l.starts_with("Rename") => {
                 let sig = self.class_at_bc_idx(menu.line_idx)
@@ -7437,6 +7479,29 @@ fn copy_word_label(word: &str) -> String {
         word.to_string()
     };
     format!("  Copy: {}", display)
+}
+
+/// Parse a Dalvik z-variant conditional jump instruction.
+/// Returns (slot, taken_value, not_taken_value, target_label) or None.
+/// Handles: if-eqz, if-nez, if-ltz, if-gez, if-gtz, if-lez
+fn parse_cond_jump(text: &str) -> Option<(i32, i64, i64, String)> {
+    let mut parts = text.split_whitespace();
+    let opcode = parts.next()?;
+    let (taken, not_taken): (i64, i64) = match opcode {
+        "if-eqz" => (0, 1),
+        "if-nez" => (1, 0),
+        "if-ltz" => (-1, 0),
+        "if-gez" => (0, -1),
+        "if-gtz" => (1, 0),
+        "if-lez" => (0, 1),
+        _ => return None,
+    };
+    // "v3,"
+    let reg_str = parts.next()?;
+    let slot: i32 = reg_str.trim_start_matches('v').trim_end_matches(',').parse().ok()?;
+    // "001a"
+    let target = parts.next()?.to_string();
+    Some((slot, taken, not_taken, target))
 }
 
 fn classify_call(class_sig: &str) -> CallCategory {

@@ -525,6 +525,15 @@ pub enum OutboundCommand {
     #[serde(rename = "gate_release")]
     GateRelease {},
 
+    /// Set a Dalvik register (slot) to an integer value.
+    /// slot is the raw Dalvik register number (vN = slot N).
+    /// value is sign-extended to jint by the agent.
+    #[serde(rename = "set_local")]
+    SetLocal {
+        slot: i32,
+        value: i64,
+    },
+
     #[serde(rename = "redefine_class")]
     RedefineClass {
         class_sig: String,

@@ -3159,6 +3159,16 @@ void DebuggerCommandLoop(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
         } else if (strcmp(dcmd.cmd, "regs") == 0) {
             CmdRegs(jvmti, jni, thread, method);
 
+        } else if (strcmp(dcmd.cmd, "set_local") == 0) {
+            int slot = 0;
+            long long value = 0;
+            json_get_int(dcmd.raw, "slot", &slot);
+            json_get_long(dcmd.raw, "value", &value);
+            jvmtiError err = jvmti->SetLocalInt(thread, 0, slot, (jint)value);
+            if (err != JVMTI_ERROR_NONE) {
+                SendError("SetLocalInt failed (err=%d, slot=%d)", err, slot);
+            }
+
         } else if (strcmp(dcmd.cmd, "stack") == 0) {
             CmdStack(jvmti, jni, thread);
 
@@ -4546,7 +4556,8 @@ static void DispatchCommand(jvmtiEnv* jvmti, JNIEnv* jni, const char* json) {
         strcmp(cmd, "inspect") == 0 ||
         strcmp(cmd, "eval") == 0 ||
         strcmp(cmd, "hexdump") == 0 ||
-        strcmp(cmd, "dex_dump") == 0) {
+        strcmp(cmd, "dex_dump") == 0 ||
+        strcmp(cmd, "set_local") == 0) {
 
         if (!g_dbg.thread_suspended) {
             // Stale refresh from server arriving between steps — silently drop.
