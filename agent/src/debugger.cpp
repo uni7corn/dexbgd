@@ -3088,7 +3088,15 @@ static void CmdDexDump(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
 
 void DebuggerCommandLoop(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
                          jmethodID method, jlocation location, int bp_id) {
-    g_dbg.thread_suspended = true;
+    // Only one thread at a time in the command loop. If another thread hits a
+    // breakpoint or step while we are already suspended (e.g. two bp-crypto
+    // breakpoints firing concurrently), auto-continue it silently so its
+    // command is not stolen from the queue by the wrong thread.
+    bool expected = false;
+    if (!g_dbg.thread_suspended.compare_exchange_strong(expected, true)) {
+        ALOGW("[DBG] Concurrent bp/step on second thread — auto-continuing");
+        return;
+    }
 
     // Send hit event
     {
@@ -4543,6 +4551,27 @@ static void DispatchCommand(jvmtiEnv* jvmti, JNIEnv* jni, const char* json) {
     }
 
     ALOGI("[DBG] Dispatch: %s", cmd);
+
+    // Special case: 'continue' during active stepping cancels the step so the
+    // thread runs freely. Normally 'continue' is only processed by a thread
+    // blocked in DebuggerCommandLoop; but when the 5-second STEPPING safety
+    // timeout fires (or the user presses F5 during a stuck step), the thread
+    // is running and thread_suspended is false, so we handle it here directly.
+    if (strcmp(cmd, "continue") == 0 && !g_dbg.thread_suspended &&
+            g_dbg.step_mode != STEP_NONE) {
+        ALOGI("[DBG] Continue received during active stepping — canceling step");
+        jvmti->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_SINGLE_STEP, nullptr);
+        g_dbg.step_mode = STEP_NONE;
+        // Do NOT call ClearStepThread here: DeleteGlobalRef from the socket thread
+        // races with any in-flight OnSingleStep callback. step_thread will be
+        // cleaned up by the next SetStepThread call.
+        JsonBuf jb;
+        json_start(&jb);
+        json_add_string(&jb, "type", "resumed");
+        json_end(&jb);
+        SendToClient(jb.buf);
+        return;
+    }
 
     // Commands that require a suspended thread — push to queue
     if (strcmp(cmd, "continue") == 0 ||
