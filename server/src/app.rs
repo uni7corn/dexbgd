@@ -1049,7 +1049,7 @@ impl App {
                 } else {
                     if was_deferred {
                         // Deferred breakpoint now active — condition was already attached on BpDeferred
-                        self.log_info(&format!("Breakpoint #{} set (class loaded): {}.{} @{}", id, cls, method, location));
+                        self.log_info(&format!("Breakpoint #{} set (class loaded): {}.{} @{:04x}", id, cls, method, location));
                     } else {
                         // Normal (non-deferred) breakpoint confirmation — attach condition now.
                         let cond = if let Some(ref c) = self.pending_bp_cond {
@@ -1059,14 +1059,14 @@ impl App {
                         };
                         if let Some(c) = cond {
                             if !c.is_empty() {
-                                self.log_info(&format!("Breakpoint #{} set: {}.{} @{} [{}]",
+                                self.log_info(&format!("Breakpoint #{} set: {}.{} @{:04x} [{}]",
                                     id, cls, method, location, c));
                                 self.bp_manager.set_condition(id, c);
                             } else {
-                                self.log_info(&format!("Breakpoint #{} set: {}.{} @{}", id, cls, method, location));
+                                self.log_info(&format!("Breakpoint #{} set: {}.{} @{:04x}", id, cls, method, location));
                             }
                         } else {
-                            self.log_info(&format!("Breakpoint #{} set: {}.{} @{}", id, cls, method, location));
+                            self.log_info(&format!("Breakpoint #{} set: {}.{} @{:04x}", id, cls, method, location));
                         }
                     }
                 }
@@ -1219,7 +1219,7 @@ impl App {
                 self.current_line = Some(line);
                 let cls = short_class(&class);
                 let line_str = if line >= 0 { format!(":{}", line) } else { String::new() };
-                self.log_info(&format!("Breakpoint #{} hit: {}.{}{} @{}",
+                self.log_info(&format!("Breakpoint #{} hit: {}.{}{} @{:04x}",
                     bp_id, cls, method, line_str, location));
                 self.auto_refresh();
 
@@ -1845,7 +1845,7 @@ impl App {
                 // Condition was removed while waiting  - just suspend normally
                 self.state = AppState::Suspended;
                 let line_str = if pending.line >= 0 { format!(":{}", pending.line) } else { String::new() };
-                self.log_info(&format!("Breakpoint #{} hit: {}.{}{} @{}",
+                self.log_info(&format!("Breakpoint #{} hit: {}.{}{} @{:04x}",
                     pending.bp_id, cls, pending.method, line_str, pending.location));
                 self.send_dis_and_stack();
                 return;
@@ -1874,7 +1874,7 @@ impl App {
         // Condition passed  - normal suspend flow
         self.state = AppState::Suspended;
         let line_str = if pending.line >= 0 { format!(":{}", pending.line) } else { String::new() };
-        self.log_info(&format!("Breakpoint #{} hit: {}.{}{} @{} (condition met)",
+        self.log_info(&format!("Breakpoint #{} hit: {}.{}{} @{:04x} (condition met)",
             pending.bp_id, cls, pending.method, line_str, pending.location));
         // Already have locals/regs, just need dis + stack
         self.send_dis_and_stack();
