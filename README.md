@@ -290,6 +290,7 @@ Aliases, comments, bookmarks, and hooks are saved per app in `sessions/<package>
 
 ```
 Ctrl+S              Save session for current app
+Ctrl+L              Launch session picker (select saved app, start and attach agent)
 
 n                   Rename current class (IDA-style, bytecodes panel only)
                     Empty input removes the alias.
@@ -446,6 +447,7 @@ F12         Toggle mouse capture
 Ctrl+T      Cycle color theme
 Ctrl+B      Toggle bookmark at bytecode cursor
 Ctrl+S      Save session (aliases, comments, hooks, bookmarks)
+Ctrl+L      Launch session picker (select saved app, start and attach agent)
 Tab         Cycle panels (left → right → log)
 Esc         Go back / close menu
 q           Quit

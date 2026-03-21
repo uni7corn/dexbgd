@@ -31,7 +31,7 @@ pub struct Session {
     pub bookmarks: Vec<SessionBookmark>,
 }
 
-fn session_dir() -> Option<PathBuf> {
+pub fn session_dir() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("sessions")))

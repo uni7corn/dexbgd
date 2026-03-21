@@ -4,6 +4,7 @@ pub mod comment_dialog;
 pub mod command;
 pub mod locals;
 pub mod log;
+pub mod session_picker;
 pub mod statusbar;
 pub mod tabbed;
 
@@ -149,6 +150,10 @@ pub fn draw(f: &mut Frame, app: &App) -> LayoutGeometry {
     // Draw alias/rename dialog overlay
     if app.alias_open {
         alias_dialog::render(f, size, app);
+    }
+    // Draw session picker overlay
+    if app.session_picker_open {
+        session_picker::render(f, size, app);
     }
 
     geom

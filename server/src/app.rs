@@ -559,6 +559,11 @@ pub struct App {
     pub alias_target: Option<String>, // JNI sig being renamed
     pub comment_input: String,
     pub comment_cursor: usize,
+
+    // Session picker dialog (Ctrl+L)
+    pub session_picker_open: bool,
+    pub session_picker_list: Vec<String>,  // package names from sessions/*.json
+    pub session_picker_sel: usize,
 }
 
 const MAX_LOG_ENTRIES: usize = 10000;
@@ -727,6 +732,9 @@ impl App {
             alias_target: None,
             comment_input: String::new(),
             comment_cursor: 0,
+            session_picker_open: false,
+            session_picker_list: Vec::new(),
+            session_picker_sel: 0,
         }
     }
 
@@ -786,6 +794,7 @@ impl App {
 
         // Process AI events (non-blocking)
         self.poll_ai_events();
+
 
         // Process terminal events
         if event::poll(Duration::from_millis(50)).unwrap_or(false) {
@@ -3692,6 +3701,12 @@ impl App {
             return;
         }
 
+        // Session picker dialog absorbs all keys
+        if self.session_picker_open {
+            self.handle_session_picker_key(key);
+            return;
+        }
+
         // Dismiss context menu on any key, or navigate if keyboard_navigable
         if self.context_menu.is_some() {
             if self.context_menu.as_ref().map(|m| m.keyboard_navigable).unwrap_or(false) {
@@ -3739,6 +3754,10 @@ impl App {
             }
             (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
                 self.do_save_session();
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                self.open_session_picker();
+                return;
             }
             (KeyModifiers::CONTROL, KeyCode::Char('t')) => {
                 self.theme_index = (self.theme_index + 1) % self.themes.len();
@@ -5461,6 +5480,54 @@ impl App {
         }
     }
 
+    fn open_session_picker(&mut self) {
+        let dir = match crate::session::session_dir() {
+            Some(d) => d,
+            None => {
+                self.log_error("Cannot determine sessions directory");
+                return;
+            }
+        };
+        let mut packages: Vec<String> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                name.strip_suffix(".json").map(|s| s.to_string())
+            })
+            .collect();
+        packages.sort();
+        self.session_picker_list = packages;
+        self.session_picker_sel = 0;
+        self.session_picker_open = true;
+    }
+
+    fn handle_session_picker_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.session_picker_open = false;
+            }
+            KeyCode::Up => {
+                if self.session_picker_sel > 0 {
+                    self.session_picker_sel -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.session_picker_sel + 1 < self.session_picker_list.len() {
+                    self.session_picker_sel += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(pkg) = self.session_picker_list.get(self.session_picker_sel).cloned() {
+                    self.session_picker_open = false;
+                    self.do_launch(&pkg);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn do_save_settings(&mut self) {
         match self.config.write_ini(
             self.theme_index,
@@ -5941,6 +6008,7 @@ impl App {
         self.log_info("  bm <label>      - Rename selected bookmark (Bookmarks tab)");
         self.log_info("  Ctrl+B          - Toggle bookmark at bytecode cursor");
         self.log_info("  Ctrl+S          - Save session (aliases, comments, hooks, bookmarks)");
+        self.log_info("  Ctrl+L          - Launch session (pick saved app, attach agent via adb)");
         self.log_info("  save [file]     - Save full log to file (default: dexbgd_<ts>.log)");
         self.log_info("  ss              - Save settings to dexbgd.ini (theme, layout, history)");
         self.log_info("  ai <prompt>     - AI analysis (full autonomy)");
