@@ -639,7 +639,26 @@ fn draw_decompiler(f: &mut Frame, app: &App, area: Rect, block: ratatui::widgets
     for (idx, (offset, spans, important)) in decompiled.iter().enumerate().skip(scroll).take(code_height) {
         let is_current = current_dec_idx == Some(idx);
         let is_near  = near_current_idx == Some(idx);
-        let marker = if is_current { "\u{25ba} " } else if is_near { "\u{00b7} " } else { "  " };
+
+        let has_bp = if let (Some(cls), Some(meth)) = (&app.current_class, &app.current_method) {
+            app.bp_manager.breakpoints.iter().any(|bp| {
+                bp.class == *cls && bp.method == *meth && bp.location == *offset as i64
+            })
+        } else {
+            false
+        };
+
+        let marker = if has_bp && is_current {
+            "\u{25cf}\u{25ba}"   // ●►
+        } else if has_bp {
+            "\u{25cf} "          // ●
+        } else if is_current {
+            " \u{25ba}"          // ►
+        } else if is_near {
+            " \u{00b7}"          // ·
+        } else {
+            "  "
+        };
         let offset_str = format!("{:04x} ", offset);
 
         // Selection column range for this line (None = row not selected)
@@ -654,8 +673,8 @@ fn draw_decompiler(f: &mut Frame, app: &App, area: Rect, block: ratatui::widgets
 
         let marker_style = if is_current {
             Style::default().fg(t.ui_value).bg(bg).add_modifier(Modifier::BOLD)
-        } else if is_near {
-            Style::default().fg(t.ui_dim).bg(bg)
+        } else if has_bp {
+            Style::default().fg(t.ui_breakpoint).bg(bg).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(t.ui_dim).bg(bg)
         };
@@ -687,6 +706,10 @@ fn draw_decompiler(f: &mut Frame, app: &App, area: Rect, block: ratatui::widgets
             line_spans.push(Span::styled(span.content.to_string(), s));
         }
 
+        if let Some(ref hw) = app.bytecodes_highlight {
+            apply_highlight(&mut line_spans, hw, t.ui_highlight_bg);
+        }
+
         lines.push(Line::from(line_spans));
     }
 
@@ -695,7 +718,7 @@ fn draw_decompiler(f: &mut Frame, app: &App, area: Rect, block: ratatui::widgets
 }
 
 /// Convert a bytecode instruction into a simplified pseudo-smali span.
-fn decompile_instruction(text: &str, first_word: &str, t: &Theme) -> (Vec<Span<'static>>, bool) {
+pub fn decompile_instruction(text: &str, first_word: &str, t: &Theme) -> (Vec<Span<'static>>, bool) {
     match first_word {
         // Method calls  - the most important for malware analysis
         w if w.starts_with("invoke-") => {
@@ -708,11 +731,27 @@ fn decompile_instruction(text: &str, first_word: &str, t: &Theme) -> (Vec<Span<'
                 .unwrap_or("");
 
             let fg = if method_part.contains('.') { t.bc_reference } else { t.bc_unresolved };
-            (vec![
+            let mut spans = vec![
                 Span::styled("call ".to_string(), Style::default().fg(t.bc_opcode)),
                 Span::styled(method_part.to_string(), Style::default().fg(fg)),
-                Span::styled(format!(" {}", reg_part), Style::default().fg(t.ui_dim)),
-            ], true)
+            ];
+            // Split register group into individual spans so each register is highlightable
+            if reg_part.starts_with('{') && reg_part.ends_with('}') {
+                let inner = &reg_part[1..reg_part.len()-1];
+                spans.push(Span::styled(" {".to_string(), Style::default().fg(t.ui_dim)));
+                let regs: Vec<&str> = inner.split(',').collect();
+                for (i, r) in regs.iter().enumerate() {
+                    let reg = r.trim().to_string();
+                    if i > 0 {
+                        spans.push(Span::styled(", ".to_string(), Style::default().fg(t.ui_dim)));
+                    }
+                    spans.push(Span::styled(reg, Style::default().fg(t.ui_dim)));
+                }
+                spans.push(Span::styled("}".to_string(), Style::default().fg(t.ui_dim)));
+            } else {
+                spans.push(Span::styled(format!(" {}", reg_part), Style::default().fg(t.ui_dim)));
+            }
+            (spans, true)
         }
 
         // String loads

@@ -2167,6 +2167,18 @@ impl App {
                                 self.bytecodes_sel_anchor = Some((dec_idx, click_col));
                                 self.bytecodes_sel_head = Some((dec_idx, click_col));
                                 self.drag = DragTarget::BytecodesArea;
+                                let raw_idx = raw_idx_for_decompiled(&self.bytecodes, dec_idx);
+                                if let Some(instr) = self.bytecodes.get(raw_idx) {
+                                    // Build flat decompiled text so word_at_col matches span contents.
+                                    // Format: "  XXXX " (7 chars) + concatenated span text.
+                                    let first_word = instr.text.split_whitespace().next().unwrap_or("");
+                                    let (spans, _) = crate::tui::bytecodes::decompile_instruction(
+                                        &instr.text, first_word, &self.theme);
+                                    let mut flat = format!("  {:04x} ", instr.offset);
+                                    for s in &spans { flat.push_str(&s.content); }
+                                    self.bytecodes_highlight = word_at_col(&flat, click_col)
+                                        .map(|w| w.to_string());
+                                }
                             }
                         } else if self.left_tab == LeftTab::Bytecodes && !self.bytecodes.is_empty() {
                             let inner_y = (row.saturating_sub(ba.y + 1)) as usize;
@@ -4661,6 +4673,8 @@ impl App {
             KeyCode::F(2) => {
                 if self.focus == 0 && self.left_tab == LeftTab::Bytecodes {
                     self.toggle_bp_at_cursor();
+                } else if self.focus == 0 && self.left_tab == LeftTab::Decompiler {
+                    self.toggle_bp_at_decompiler_cursor();
                 }
             }
             // F-keys for stepping
@@ -4794,6 +4808,11 @@ impl App {
             }
             "help" | "?" => {
                 self.show_help();
+                return;
+            }
+            "lc" | "log-clear" => {
+                self.log.clear();
+                self.log_scroll = 0;
                 return;
             }
             "save" => {
@@ -5486,6 +5505,44 @@ impl App {
             } else if cursor >= self.bytecodes_scroll + code_height {
                 self.bytecodes_scroll = cursor.saturating_sub(code_height - 1);
             }
+        }
+    }
+
+    /// Toggle breakpoint at the selected Decompiler line (F2 in Decompiler tab).
+    fn toggle_bp_at_decompiler_cursor(&mut self) {
+        // Use sel_anchor (set on click) to find the decompiled line; fall back to current PC.
+        let raw_idx = if let Some((dec_idx, _)) = self.bytecodes_sel_anchor {
+            raw_idx_for_decompiled(&self.bytecodes, dec_idx)
+        } else if let Some(loc) = self.current_loc {
+            match self.bytecodes.iter().position(|i| i.offset == loc as u32) {
+                Some(i) => i,
+                None => return,
+            }
+        } else {
+            return;
+        };
+        let instr = match self.bytecodes.get(raw_idx) {
+            Some(i) => i,
+            None => return,
+        };
+        let cls = match &self.current_class {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        let meth = match &self.current_method {
+            Some(m) => m.clone(),
+            None => return,
+        };
+        let offset = instr.offset as i64;
+        if let Some(bp) = self.bp_manager.breakpoints.iter().find(|bp| {
+            bp.class == cls && bp.method == meth && bp.location == offset
+        }) {
+            let id = bp.id;
+            let cmd = format!("bd {}", id);
+            self.execute_command(&cmd);
+        } else {
+            let cmd = format!("bp {} {} @0x{:04x}", cls, meth, instr.offset);
+            self.execute_command(&cmd);
         }
     }
 
@@ -6689,6 +6746,7 @@ impl App {
         self.log_info("  Ctrl+B          - Toggle bookmark at bytecode cursor");
         self.log_info("  Ctrl+S          - Save session (aliases, comments, hooks, bookmarks)");
         self.log_info("  Ctrl+L          - Launch session (pick saved app, attach agent via adb)");
+        self.log_info("  lc              - Clear log window");
         self.log_info("  save [file]     - Save full log to file (default: dexbgd_<ts>.log)");
         self.log_info("  ss              - Save settings to dexbgd.ini (theme, layout, history)");
         self.log_info("  ai <prompt>     - AI analysis (full autonomy)");
