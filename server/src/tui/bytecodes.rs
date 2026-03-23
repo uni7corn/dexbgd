@@ -761,7 +761,8 @@ pub fn decompile_instruction(text: &str, first_word: &str, t: &Theme) -> (Vec<Sp
             let string_val = parts.get(2).unwrap_or(&"");
             let fg = if string_val.starts_with('"') { t.bc_string } else { t.bc_unresolved };
             (vec![
-                Span::styled(format!("{} = ", reg), Style::default().fg(t.bc_register)),
+                Span::styled(reg.to_string(), Style::default().fg(t.bc_register)),
+                Span::styled(" = ".to_string(), Style::default().fg(t.ui_dim)),
                 Span::styled(string_val.to_string(), Style::default().fg(fg)),
             ], true)
         }
@@ -773,7 +774,8 @@ pub fn decompile_instruction(text: &str, first_word: &str, t: &Theme) -> (Vec<Sp
             let type_ref = parts.get(2).unwrap_or(&"?");
             let fg = if type_ref.contains('.') { t.bc_reference } else { t.bc_unresolved };
             (vec![
-                Span::styled(format!("{} = new ", reg), Style::default().fg(t.bc_register)),
+                Span::styled(reg.to_string(), Style::default().fg(t.bc_register)),
+                Span::styled(" = new ".to_string(), Style::default().fg(t.ui_dim)),
                 Span::styled(type_ref.to_string(), Style::default().fg(fg)),
             ], true)
         }
@@ -786,8 +788,10 @@ pub fn decompile_instruction(text: &str, first_word: &str, t: &Theme) -> (Vec<Sp
             let regs = operands.strip_suffix(&format!(", {}", field_ref)).unwrap_or(operands);
             let fg = if field_ref.contains('.') { t.bc_reference } else { t.bc_unresolved };
             let op = if w.starts_with("sget") { "sget" } else { "get" };
+            let dest_reg = regs.split(',').next().unwrap_or("?");
             (vec![
-                Span::styled(format!("{} = ", regs.split(',').next().unwrap_or("?")), Style::default().fg(t.bc_register)),
+                Span::styled(dest_reg.to_string(), Style::default().fg(t.bc_register)),
+                Span::styled(" = ".to_string(), Style::default().fg(t.ui_dim)),
                 Span::styled(format!("{} ", op), Style::default().fg(t.bc_opcode)),
                 Span::styled(field_ref.to_string(), Style::default().fg(fg)),
             ], false)
@@ -828,7 +832,8 @@ pub fn decompile_instruction(text: &str, first_word: &str, t: &Theme) -> (Vec<Sp
             let reg = parts.get(1).unwrap_or(&"?").trim_end_matches(',');
             let val = parts.get(2).unwrap_or(&"");
             (vec![
-                Span::styled(format!("{} = ", reg), Style::default().fg(t.bc_register)),
+                Span::styled(reg.to_string(), Style::default().fg(t.bc_register)),
+                Span::styled(" = ".to_string(), Style::default().fg(t.ui_dim)),
                 Span::styled(val.to_string(), Style::default().fg(t.bc_number)),
             ], false)
         }
