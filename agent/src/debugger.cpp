@@ -1798,6 +1798,300 @@ static void CmdInspect(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
 }
 
 // ---------------------------------------------------------------------------
+// setfield / setstaticfield: write instance or static fields on heap objects
+// ---------------------------------------------------------------------------
+
+// Parse a value string into a jlong for use with integral SetField* calls.
+// Accepts "true"/"false", "0x..." hex, or decimal integers.
+static bool parse_field_value(const char* value_str, jlong* out) {
+    if (strcmp(value_str, "true")  == 0) { *out = 1; return true; }
+    if (strcmp(value_str, "false") == 0) { *out = 0; return true; }
+    if (strncmp(value_str, "0x", 2) == 0 || strncmp(value_str, "0X", 2) == 0) {
+        char* end;
+        *out = (jlong)strtoull(value_str + 2, &end, 16);
+        return *end == '\0';
+    }
+    char* end;
+    *out = (jlong)strtoll(value_str, &end, 10);
+    return *end == '\0';
+}
+
+// set_field: write an instance field on the object in register `slot`.
+static void CmdSetField(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
+                        const char* json) {
+    int slot = -1, depth = 0;
+    char field_name[128] = "", value_str[128] = "";
+    if (!json_get_int(json, "slot", &slot)) {
+        SendError("set_field: missing slot"); return;
+    }
+    json_get_int(json, "depth", &depth);
+    if (!json_get_string(json, "field_name", field_name, sizeof(field_name))) {
+        SendError("set_field: missing field_name"); return;
+    }
+    if (!json_get_string(json, "value_str", value_str, sizeof(value_str))) {
+        SendError("set_field: missing value_str"); return;
+    }
+
+    jobject obj = nullptr;
+    jvmtiError err = jvmti->GetLocalObject(thread, depth, slot, &obj);
+    if (err != JVMTI_ERROR_NONE || !obj) {
+        SendError("set_field: GetLocalObject failed (err=%d, slot=%d)", err, slot);
+        return;
+    }
+
+    // Walk class hierarchy (local refs) to find instance field by name
+    jfieldID found_fid = nullptr;
+    jclass found_klass = nullptr;
+    char found_fsig[64] = "";
+
+    jclass cur = jni->GetObjectClass(obj);  // local ref
+    while (cur && !found_fid) {
+        jint count = 0;
+        jfieldID* fids = nullptr;
+        jvmti->GetClassFields(cur, &count, &fids);
+
+        for (int i = 0; i < count; i++) {
+            char* fname = nullptr;
+            char* fsig  = nullptr;
+            jint  fmod  = 0;
+            jvmti->GetFieldName(cur, fids[i], &fname, &fsig, nullptr);
+            jvmti->GetFieldModifiers(cur, fids[i], &fmod);
+            bool match = fname && strcmp(fname, field_name) == 0 && !(fmod & 0x0008);
+            if (match) {
+                found_fid   = fids[i];
+                found_klass = cur;  // borrow local ref; freed after use
+                if (fsig) {
+                    strncpy(found_fsig, fsig, sizeof(found_fsig) - 1);
+                    found_fsig[sizeof(found_fsig) - 1] = '\0';
+                }
+            }
+            if (fname) jvmti->Deallocate(reinterpret_cast<unsigned char*>(fname));
+            if (fsig)  jvmti->Deallocate(reinterpret_cast<unsigned char*>(fsig));
+            if (match) break;
+        }
+        if (fids) jvmti->Deallocate(reinterpret_cast<unsigned char*>(fids));
+
+        if (!found_fid) {
+            jclass super = jni->GetSuperclass(cur);
+            jni->DeleteLocalRef(cur);
+            cur = super;  // local ref or null
+        }
+    }
+    // On not-found, cur walked to null (past java/lang/Object)
+    // On found, cur == found_klass and still needs DeleteLocalRef after use
+
+    if (!found_fid) {
+        jni->DeleteLocalRef(obj);
+        SendError("set_field: instance field '%s' not found on object", field_name);
+        return;
+    }
+
+    char sig0 = found_fsig[0];
+    if (sig0 == '[') {
+        jni->DeleteLocalRef(cur);
+        jni->DeleteLocalRef(obj);
+        SendError("set_field: array field write not supported");
+        return;
+    }
+    if (sig0 == 'L') {
+        if (strcmp(found_fsig, "Ljava/lang/String;") != 0) {
+            jni->DeleteLocalRef(cur);
+            jni->DeleteLocalRef(obj);
+            SendError("set_field: object field write not supported (String only)");
+            return;
+        }
+        jstring str = (strcmp(value_str, "null") == 0)
+                      ? nullptr : jni->NewStringUTF(value_str);
+        jni->SetObjectField(obj, found_fid, str);
+        if (str) jni->DeleteLocalRef(str);
+        jni->DeleteLocalRef(cur);
+        jni->DeleteLocalRef(obj);
+        JsonBuf jb;
+        json_start(&jb);
+        json_add_string(&jb, "type", "set_field_ok");
+        json_add_string(&jb, "field", field_name);
+        json_add_string(&jb, "value", value_str);
+        json_end(&jb);
+        SendToClient(jb.buf);
+        return;
+    }
+    if (sig0 == 'F' || sig0 == 'D') {
+        jni->DeleteLocalRef(cur);
+        jni->DeleteLocalRef(obj);
+        SendError("set_field: float/double write not supported in v1");
+        return;
+    }
+
+    // Primitive path — parse value now that we know it's not a String
+    jlong parsed_val = 0;
+    if (!parse_field_value(value_str, &parsed_val)) {
+        jni->DeleteLocalRef(cur);
+        jni->DeleteLocalRef(obj);
+        SendError("set_field: cannot parse value '%s'", value_str);
+        return;
+    }
+
+    switch (sig0) {
+        case 'Z': jni->SetBooleanField(obj, found_fid, (jboolean)(parsed_val != 0)); break;
+        case 'B': jni->SetByteField   (obj, found_fid, (jbyte)parsed_val);           break;
+        case 'S': jni->SetShortField  (obj, found_fid, (jshort)parsed_val);          break;
+        case 'C': jni->SetCharField   (obj, found_fid, (jchar)parsed_val);           break;
+        case 'I': jni->SetIntField    (obj, found_fid, (jint)parsed_val);            break;
+        case 'J': jni->SetLongField   (obj, found_fid, (jlong)parsed_val);           break;
+        default:
+            jni->DeleteLocalRef(cur);
+            jni->DeleteLocalRef(obj);
+            SendError("set_field: unsupported field type '%c'", sig0);
+            return;
+    }
+
+    jni->DeleteLocalRef(cur);
+    jni->DeleteLocalRef(obj);
+
+    JsonBuf jb;
+    json_start(&jb);
+    json_add_string(&jb, "type", "set_field_ok");
+    json_add_string(&jb, "field", field_name);
+    json_add_string(&jb, "value", value_str);
+    json_end(&jb);
+    SendToClient(jb.buf);
+}
+
+// set_static_field: write a static field on a class looked up by JNI signature.
+static void CmdSetStaticField(jvmtiEnv* jvmti, JNIEnv* jni, const char* json) {
+    char class_sig[256] = "", field_name[128] = "", value_str[128] = "";
+    if (!json_get_string(json, "class_sig", class_sig, sizeof(class_sig))) {
+        SendError("set_static_field: missing class_sig"); return;
+    }
+    if (!json_get_string(json, "field_name", field_name, sizeof(field_name))) {
+        SendError("set_static_field: missing field_name"); return;
+    }
+    if (!json_get_string(json, "value_str", value_str, sizeof(value_str))) {
+        SendError("set_static_field: missing value_str"); return;
+    }
+
+    // Use GetLoadedClasses-based lookup — jni->FindClass only searches the
+    // bootstrap classloader and cannot find app classes from a native thread.
+    jclass klass = FindClassBySig(jvmti, jni, class_sig);
+    if (!klass) {
+        SendError("set_static_field: class not found: %s", class_sig);
+        return;
+    }
+
+    // Walk class hierarchy (global refs, mirroring CmdSetWatchpoint) to find static field
+    jfieldID found_fid   = nullptr;
+    jclass   found_klass = nullptr;
+    char     found_fsig[64] = "";
+
+    jclass cur = klass;  // global ref from FindClassBySig
+    while (cur && !found_fid) {
+        jint count = 0;
+        jfieldID* fids = nullptr;
+        jvmti->GetClassFields(cur, &count, &fids);
+
+        for (int i = 0; i < count; i++) {
+            char* fname = nullptr;
+            char* fsig  = nullptr;
+            jint  fmod  = 0;
+            jvmti->GetFieldName(cur, fids[i], &fname, &fsig, nullptr);
+            jvmti->GetFieldModifiers(cur, fids[i], &fmod);
+            bool match = fname && strcmp(fname, field_name) == 0 && (fmod & 0x0008);
+            if (match) {
+                found_fid   = fids[i];
+                found_klass = (jclass)jni->NewGlobalRef(cur);
+                if (fsig) {
+                    strncpy(found_fsig, fsig, sizeof(found_fsig) - 1);
+                    found_fsig[sizeof(found_fsig) - 1] = '\0';
+                }
+            }
+            if (fname) jvmti->Deallocate(reinterpret_cast<unsigned char*>(fname));
+            if (fsig)  jvmti->Deallocate(reinterpret_cast<unsigned char*>(fsig));
+            if (match) break;
+        }
+        if (fids) jvmti->Deallocate(reinterpret_cast<unsigned char*>(fids));
+
+        if (!found_fid) {
+            jclass super = jni->GetSuperclass(cur);
+            jni->DeleteGlobalRef(cur);
+            cur = super ? (jclass)jni->NewGlobalRef(super) : nullptr;
+            if (super) jni->DeleteLocalRef(super);
+        } else {
+            jni->DeleteGlobalRef(cur);
+            cur = nullptr;
+        }
+    }
+    if (cur) jni->DeleteGlobalRef(cur);
+
+    if (!found_fid || !found_klass) {
+        SendError("set_static_field: static field '%s' not found in %s", field_name, class_sig);
+        return;
+    }
+
+    char sig0 = found_fsig[0];
+    if (sig0 == '[') {
+        jni->DeleteGlobalRef(found_klass);
+        SendError("set_static_field: array field write not supported");
+        return;
+    }
+    if (sig0 == 'L') {
+        if (strcmp(found_fsig, "Ljava/lang/String;") != 0) {
+            jni->DeleteGlobalRef(found_klass);
+            SendError("set_static_field: object field write not supported (String only)");
+            return;
+        }
+        jstring str = (strcmp(value_str, "null") == 0)
+                      ? nullptr : jni->NewStringUTF(value_str);
+        jni->SetStaticObjectField(found_klass, found_fid, str);
+        if (str) jni->DeleteLocalRef(str);
+        jni->DeleteGlobalRef(found_klass);
+        JsonBuf jb;
+        json_start(&jb);
+        json_add_string(&jb, "type", "set_field_ok");
+        json_add_string(&jb, "field", field_name);
+        json_add_string(&jb, "value", value_str);
+        json_end(&jb);
+        SendToClient(jb.buf);
+        return;
+    }
+    if (sig0 == 'F' || sig0 == 'D') {
+        jni->DeleteGlobalRef(found_klass);
+        SendError("set_static_field: float/double write not supported in v1");
+        return;
+    }
+
+    // Primitive path — parse value now that we know it's not a String
+    jlong parsed_val = 0;
+    if (!parse_field_value(value_str, &parsed_val)) {
+        jni->DeleteGlobalRef(found_klass);
+        SendError("set_static_field: cannot parse value '%s'", value_str);
+        return;
+    }
+
+    switch (sig0) {
+        case 'Z': jni->SetStaticBooleanField(found_klass, found_fid, (jboolean)(parsed_val != 0)); break;
+        case 'B': jni->SetStaticByteField   (found_klass, found_fid, (jbyte)parsed_val);           break;
+        case 'S': jni->SetStaticShortField  (found_klass, found_fid, (jshort)parsed_val);          break;
+        case 'C': jni->SetStaticCharField   (found_klass, found_fid, (jchar)parsed_val);           break;
+        case 'I': jni->SetStaticIntField    (found_klass, found_fid, (jint)parsed_val);            break;
+        case 'J': jni->SetStaticLongField   (found_klass, found_fid, (jlong)parsed_val);           break;
+        default:
+            jni->DeleteGlobalRef(found_klass);
+            SendError("set_static_field: unsupported field type '%c'", sig0);
+            return;
+    }
+
+    jni->DeleteGlobalRef(found_klass);
+
+    JsonBuf jb;
+    json_start(&jb);
+    json_add_string(&jb, "type", "set_field_ok");
+    json_add_string(&jb, "field", field_name);
+    json_add_string(&jb, "value", value_str);
+    json_end(&jb);
+    SendToClient(jb.buf);
+}
+
+// ---------------------------------------------------------------------------
 // Watchpoints: set_watchpoint, clear_watchpoint, list_watchpoints
 // ---------------------------------------------------------------------------
 
@@ -3483,6 +3777,9 @@ void DebuggerCommandLoop(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
         } else if (strcmp(dcmd.cmd, "inspect") == 0) {
             CmdInspect(jvmti, jni, thread, dcmd.raw);
 
+        } else if (strcmp(dcmd.cmd, "set_field") == 0) {
+            CmdSetField(jvmti, jni, thread, dcmd.raw);
+
         } else if (strcmp(dcmd.cmd, "eval") == 0) {
             CmdEval(jvmti, jni, thread, dcmd.raw);
 
@@ -4921,6 +5218,8 @@ static void DispatchGlobalCommand(jvmtiEnv* jvmti, JNIEnv* jni,
         CmdClearWatchpoint(jvmti, jni, json);
     } else if (strcmp(cmd, "list_watchpoints") == 0) {
         CmdListWatchpoints(jvmti, jni, json);
+    } else if (strcmp(cmd, "set_static_field") == 0) {
+        CmdSetStaticField(jvmti, jni, json);
     } else {
         SendError("unknown cmd: %s", cmd);
     }
@@ -4970,7 +5269,8 @@ static void DispatchCommand(jvmtiEnv* jvmti, JNIEnv* jni, const char* json) {
         strcmp(cmd, "eval") == 0 ||
         strcmp(cmd, "hexdump") == 0 ||
         strcmp(cmd, "dex_dump") == 0 ||
-        strcmp(cmd, "set_local") == 0) {
+        strcmp(cmd, "set_local") == 0 ||
+        strcmp(cmd, "set_field") == 0) {
 
         if (!g_dbg.thread_suspended) {
             // Stale refresh from server arriving between steps — silently drop.

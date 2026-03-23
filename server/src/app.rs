@@ -1728,6 +1728,10 @@ impl App {
                 self.log_info(&format!("Watchpoints: {}", watchpoints));
             }
 
+            AgentMessage::SetFieldOk { field, value } => {
+                self.log_info(&format!("[setfield] {} = {} (written)", field, value));
+            }
+
             AgentMessage::WatchpointHit { wp_id: _, field, class, access, new_value, thread, method, method_class, location } => {
                 let val_str = new_value.as_deref().unwrap_or("");
                 if access == "write" {
@@ -4596,6 +4600,20 @@ impl App {
             return;
         }
 
+        // setfield [this|vN] fieldName value  — write instance field on heap object
+        if input.starts_with("setfield ") || input.starts_with("sf ") {
+            let rest = input.splitn(2, ' ').nth(1).unwrap_or("").trim();
+            self.do_setfield(rest);
+            return;
+        }
+
+        // setstaticfield Lcom/pkg/Class; fieldName value  — write static field
+        if input.starts_with("setstaticfield ") || input.starts_with("ssf ") {
+            let rest = input.splitn(2, ' ').nth(1).unwrap_or("").trim();
+            self.do_setstaticfield(rest);
+            return;
+        }
+
         if input.starts_with("attach ") {
             let pkg = input.splitn(2, ' ').nth(1).unwrap_or("").trim();
             self.do_attach(pkg);
@@ -5805,6 +5823,77 @@ impl App {
         self.send_command(OutboundCommand::SetLocal { slot, value, type_hint: Some(type_hint) });
         self.send_command(OutboundCommand::Locals {});
         self.send_command(OutboundCommand::Regs {});
+    }
+
+    fn do_setfield(&mut self, rest: &str) {
+        // Syntax: [this|vN] fieldName value
+        let parts: Vec<&str> = rest.splitn(3, ' ').collect();
+        if parts.len() != 3 {
+            self.log_error("Usage: setfield [this|vN] fieldName value");
+            return;
+        }
+        let target = parts[0].trim();
+        let field_name = parts[1].trim().to_string();
+        let value_str = parts[2].trim().to_string();
+
+        let slot: i32 = if target == "this" {
+            match self.locals.iter().find(|v| v.name == "this") {
+                Some(v) => v.slot,
+                None => {
+                    self.log_error("setfield: 'this' not found in locals");
+                    return;
+                }
+            }
+        } else if let Some(n) = target.strip_prefix('v') {
+            match n.parse::<i32>() {
+                Ok(s) => s,
+                Err(_) => {
+                    self.log_error("Usage: setfield [this|vN] fieldName value");
+                    return;
+                }
+            }
+        } else {
+            self.log_error("Usage: setfield [this|vN] fieldName value");
+            return;
+        };
+
+        if !matches!(self.state, AppState::Suspended | AppState::Stepping) {
+            self.log_error("Not suspended - setfield only works at a breakpoint or step");
+            return;
+        }
+
+        self.log_info(&format!("setfield v{} .{} = {}", slot, field_name, value_str));
+        self.send_command(OutboundCommand::SetField { slot, field_name, value_str, depth: 0 });
+        self.send_command(OutboundCommand::Locals {});
+    }
+
+    fn do_setstaticfield(&mut self, rest: &str) {
+        // Syntax: Lcom/pkg/Class; fieldName value
+        //      or: ClassName fieldName value  (alias lookup)
+        let parts: Vec<&str> = rest.splitn(3, ' ').collect();
+        if parts.len() != 3 {
+            self.log_error("Usage: setstaticfield Lcom/pkg/Class; fieldName value");
+            return;
+        }
+        let class_raw = parts[0].trim();
+        let field_name = parts[1].trim().to_string();
+        let value_str = parts[2].trim().to_string();
+
+        // Normalise to JNI sig: if already "L...;" pass through, else resolve alias or wrap
+        let class_sig = if class_raw.starts_with('L') && class_raw.ends_with(';') {
+            class_raw.to_string()
+        } else {
+            let resolved = self.aliases.get(class_raw).cloned()
+                .unwrap_or_else(|| class_raw.replace('.', "/"));
+            if resolved.starts_with('L') && resolved.ends_with(';') {
+                resolved
+            } else {
+                format!("L{};", resolved)
+            }
+        };
+
+        self.log_info(&format!("setstaticfield {} .{} = {}", class_sig, field_name, value_str));
+        self.send_command(OutboundCommand::SetStaticField { class_sig, field_name, value_str });
     }
 
     fn do_set_watchpoint(&mut self, rest: &str) {

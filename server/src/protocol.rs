@@ -291,6 +291,9 @@ pub enum AgentMessage {
     #[serde(rename = "wp_list")]
     WpList { watchpoints: serde_json::Value },
 
+    #[serde(rename = "set_field_ok")]
+    SetFieldOk { field: String, value: String },
+
     #[serde(rename = "error")]
     Error { msg: String },
 
@@ -571,6 +574,26 @@ pub enum OutboundCommand {
         value: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         type_hint: Option<String>,
+    },
+
+    /// Write an instance field on the object held in register `slot`.
+    /// depth: stack frame depth (0 = current frame).
+    /// value_str: stringified value; agent parses based on field signature.
+    #[serde(rename = "set_field")]
+    SetField {
+        slot:       i32,
+        field_name: String,
+        value_str:  String,
+        depth:      i32,
+    },
+
+    /// Write a static field on a class looked up by JNI signature.
+    /// class_sig: JNI form e.g. "Lcom/pkg/Class;" (slashes, not dots).
+    #[serde(rename = "set_static_field")]
+    SetStaticField {
+        class_sig:  String,
+        field_name: String,
+        value_str:  String,
     },
 
     #[serde(rename = "redefine_class")]
