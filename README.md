@@ -201,8 +201,6 @@ Point an LLM at the debugger and let it drive:
 
 The AI gets access to all debugger tools - it can set breakpoints, step, inspect variables, search strings, and build a report. Supports Claude API and local Ollama models.
 
-> **Note:** Currently only tested with Ollama (local models). Claude API and other targets need more testing and will likely need further work. This feature is a work in progress and will be improved in future versions.
-
 See [doc/ai_setup.md](doc/ai_setup.md) for setup instructions.
 
 ## Command reference
