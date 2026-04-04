@@ -1465,6 +1465,7 @@ fn draw_ai(f: &mut Frame, app: &App, area: Rect, block: ratatui::widgets::Block<
             AiLineKind::ToolCall => Style::default().fg(t.ui_dim),
             AiLineKind::ToolResult => Style::default().fg(Color::Rgb(60, 60, 60)),
             AiLineKind::Error => Style::default().fg(Color::Red),
+            AiLineKind::Cancelled => Style::default().fg(Color::Rgb(210, 90, 80)),
         };
         let spans = if let Some((r0, c0, r1, c1)) = sel {
             if i >= r0 && i <= r1 {

@@ -5569,7 +5569,7 @@ impl App {
         }
 
         // AI commands
-        if input == "ai cancel" {
+        if input == "ai cancel" || input == "ai stop" || input == "ai break" {
             self.do_ai_cancel();
             return;
         }
@@ -8466,7 +8466,7 @@ impl App {
         }
         self.ai_state = AiState::Idle;
         self.ai_output.push(AiOutputLine {
-            kind: AiLineKind::Error,
+            kind: AiLineKind::Cancelled,
             text: "[Cancelled]".into(),
         });
         self.log_info("[AI] Analysis cancelled");
@@ -8708,12 +8708,13 @@ impl App {
             }
             AiEvent::Error(err) => {
                 self.ai_state = AiState::Idle;
+                let cancelled = err == "Cancelled";
                 self.ai_output.push(AiOutputLine {
-                    kind: AiLineKind::Error,
-                    text: format!("[Error] {}", err),
+                    kind: if cancelled { AiLineKind::Cancelled } else { AiLineKind::Error },
+                    text: if cancelled { "[Cancelled]".into() } else { format!("[Error] {}", err) },
                 });
                 self.ai_auto_scroll = true;
-                self.log_error(&format!("[AI] Error: {}", err));
+                if !cancelled { self.log_error(&format!("[AI] Error: {}", err)); }
                 self.ai_req_tx = None;
                 self.ai_evt_rx = None;
                 self.ai_cancel = None;

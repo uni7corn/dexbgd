@@ -94,6 +94,7 @@ pub enum AiLineKind {
     ToolCall,
     ToolResult,
     Error,
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]

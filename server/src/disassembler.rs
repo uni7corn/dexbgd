@@ -201,7 +201,8 @@ fn reg_aa(bc: &[u8], pc: usize) -> u8 {
 fn resolve_string(dex: Option<&DexData>, idx: u16) -> String {
     if let Some(d) = dex {
         if let Some(s) = d.get_string(idx as u32) {
-            let display = if s.len() > 32 { &s[..32] } else { s };
+            let cut = s.char_indices().nth(32).map(|(i, _)| i).unwrap_or(s.len());
+            let display = &s[..cut];
             return format!("\"{}\"", display);
         }
     }
@@ -330,7 +331,8 @@ fn decode_instruction(bc: &[u8], pc: usize, _len: usize, dex: Option<&DexData>) 
             let idx = u32_at(bc, pc + 2);
             let resolved = if let Some(d) = dex {
                 if let Some(s) = d.get_string(idx) {
-                    let display = if s.len() > 32 { &s[..32] } else { s };
+                    let cut = s.char_indices().nth(32).map(|(i, _)| i).unwrap_or(s.len());
+            let display = &s[..cut];
                     format!("\"{}\"", display)
                 } else {
                     format!("string@{:08x}", idx)

@@ -60,14 +60,49 @@ impl LlmClient for ClaudeClient {
         });
 
         let client = reqwest::blocking::Client::new();
-        let resp = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .body(body.to_string())
-            .send()
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+        // Retry up to 3 times on 429 with exponential backoff (15s, 30s, 60s)
+        let resp = {
+            let mut last_err = String::new();
+            let mut result = None;
+            for attempt in 0u32..4 {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Cancelled".into());
+                }
+                if attempt > 0 {
+                    let wait_secs = 15u64 * (1 << (attempt - 1)); // 15, 30, 60
+                    let _ = delta_tx.send(AiEvent::TextDelta(format!(
+                        "[Rate limit - waiting {}s before retry {}/3...]\n", wait_secs, attempt
+                    )));
+                    // Sleep in small increments so cancel is checked
+                    let steps = wait_secs * 2;
+                    for _ in 0..steps {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        if cancel.load(Ordering::Relaxed) {
+                            return Err("Cancelled".into());
+                        }
+                    }
+                }
+                let r = client
+                    .post("https://api.anthropic.com/v1/messages")
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .body(body.to_string())
+                    .send()
+                    .map_err(|e| format!("HTTP request failed: {}", e))?;
+                if r.status().as_u16() == 429 {
+                    let status = r.status();
+                    last_err = format!("Claude API error {}: {}", status, r.text().unwrap_or_default());
+                    continue;
+                }
+                result = Some(r);
+                break;
+            }
+            match result {
+                Some(r) => r,
+                None => return Err(last_err),
+            }
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
