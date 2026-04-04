@@ -1077,12 +1077,30 @@ impl App {
                                 self.bytecodes_scroll = idx.saturating_sub(2);
                             }
                         } else if self.bytecodes_auto_scroll {
-                            // Show 2 instructions before current PC, then lock to manual mode
-                            // so subsequent steps "walk" through the view instead of re-centering.
-                            let scroll = current_loc
-                                .and_then(|loc| self.bytecodes.iter().position(|i| i.offset == loc as u32))
-                                .map(|idx| idx.saturating_sub(2))
-                                .unwrap_or(0);
+                            // Show 2 lines before current PC, then lock to manual scroll.
+                            // When AI dec is cached for this method, use AI line space;
+                            // otherwise fall back to raw bytecode index.
+                            let ai_dec_key = crate::ai_dec_cache::AiDecCache::method_key(&class, &method);
+                            let ai_scroll: Option<usize> = {
+                                let ai_lines = self.ai_dec_cache.methods.get(&ai_dec_key);
+                                ai_lines.and_then(|lines| {
+                                    current_loc.and_then(|loc| {
+                                        lines.iter().enumerate()
+                                            .filter_map(|(i, l)| l.offset.map(|off| (i, off)))
+                                            .filter(|&(_, off)| off <= loc)
+                                            .max_by_key(|&(_, off)| off)
+                                            .map(|(i, _)| i)
+                                    })
+                                })
+                            };
+                            let scroll = if let Some(ai_idx) = ai_scroll {
+                                ai_idx.saturating_sub(2)
+                            } else {
+                                current_loc
+                                    .and_then(|loc| self.bytecodes.iter().position(|i| i.offset == loc as u32))
+                                    .map(|idx| idx.saturating_sub(2))
+                                    .unwrap_or(0)
+                            };
                             self.bytecodes_scroll = scroll;
                             self.bytecodes_auto_scroll = false;
                         } else {
@@ -2769,6 +2787,10 @@ impl App {
                             items.push("  Copy Line    ".into());
                             items.push("  Copy View    ".into());
                             items.push(word_label);
+                            if !self.ai_dec_cache.methods.is_empty() {
+                                items.push("─────────────".into());
+                                items.push("  Export .java ".into());
+                            }
                             self.context_menu = Some(ContextMenu {
                                 x: col,
                                 y: row,
@@ -3667,6 +3689,9 @@ impl App {
             "Copy View" => {
                 self.copy_decompiler_view();
             }
+            "Export .java" => {
+                self.export_ai_dec_java();
+            }
             "Copy: class sig" => {
                 if let Some(cls) = &self.current_class.clone() {
                     copy_to_clipboard(cls);
@@ -3781,6 +3806,55 @@ impl App {
             .collect::<Vec<_>>()
             .join("\n");
         copy_to_clipboard(&text);
+    }
+
+    fn export_ai_dec_java(&mut self) {
+        if self.ai_dec_cache.methods.is_empty() {
+            self.log_info("[AI] No decompiled methods to export");
+            return;
+        }
+        let pkg = self.current_package.as_deref().unwrap_or("unknown");
+
+        // Group method keys by class: "Lcom/example/Foo; :: methodName" -> class sig
+        let mut by_class: std::collections::BTreeMap<String, Vec<(String, &Vec<crate::ai_dec_cache::AiDecLine>)>> =
+            std::collections::BTreeMap::new();
+        for (key, lines) in &self.ai_dec_cache.methods {
+            let (class, method) = if let Some(pos) = key.find("::") {
+                (key[..pos].to_string(), key[pos + 2..].to_string())
+            } else {
+                (key.clone(), String::new())
+            };
+            by_class.entry(class).or_default().push((method, lines));
+        }
+
+        let mut out = String::new();
+        out.push_str("// AI decompiled - dexbgd\n");
+        out.push_str(&format!("// Package: {}\n", pkg));
+        for (class, methods) in &by_class {
+            out.push('\n');
+            out.push_str(&format!("// === {} ===\n", class));
+            for (method, lines) in methods {
+                out.push('\n');
+                out.push_str(&format!("// --- {} ---\n", method));
+                for line in *lines {
+                    out.push_str(&line.text);
+                    out.push('\n');
+                }
+            }
+        }
+
+        let path = format!("ai_dec/{}.java", pkg);
+        let _ = std::fs::create_dir_all("ai_dec");
+        match std::fs::write(&path, &out) {
+            Ok(_) => {
+                let abs = std::fs::canonicalize(&path)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or(path);
+                let abs = abs.trim_start_matches(r"\\?\").to_string();
+                self.log_info(&format!("[AI] Exported {} methods to {}", self.ai_dec_cache.methods.len(), abs));
+            }
+            Err(e) => self.log_error(&format!("[AI] Export failed: {}", e)),
+        }
     }
 
     // -------------------------------------------------------------------
