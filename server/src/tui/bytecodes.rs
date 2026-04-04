@@ -806,6 +806,18 @@ fn draw_ai_decompiler(
             }
         }
 
+        // Append user comment if one exists for this line's offset
+        if let Some(off) = ai_line.offset {
+            let cmt = app.current_class.as_ref().zip(app.current_method.as_ref())
+                .and_then(|(cls, meth)| app.comments.get(&(cls.clone(), meth.clone(), off as u32)));
+            if let Some(cmt) = cmt {
+                spans.push(Span::styled(
+                    format!("  ; {}", cmt),
+                    Style::default().fg(t.ui_dim).bg(line_bg),
+                ));
+            }
+        }
+
         lines.push(Line::from(spans));
     }
 

@@ -4829,6 +4829,45 @@ impl App {
                 self.focus = 4;
                 self.command_focused = true;
             }
+            // Open comment dialog on AI dec line (Decompiler tab)
+            KeyCode::Char(';')
+                if self.focus == 0 && self.left_tab == LeftTab::Decompiler =>
+            {
+                let ai_dec_key = match (&self.current_class, &self.current_method) {
+                    (Some(c), Some(m)) => Some(crate::ai_dec_cache::AiDecCache::method_key(c, m)),
+                    _ => None,
+                };
+                let bci: Option<u32> = {
+                    let ai_lines = ai_dec_key.as_deref()
+                        .and_then(|k| self.ai_dec_cache.methods.get(k));
+                    if let Some(ai_lines) = ai_lines {
+                        // Use last-clicked line, then current PC, then first visible
+                        let target_idx = self.bytecodes_sel_anchor.map(|(row, _)| row)
+                            .or_else(|| self.current_loc.and_then(|loc| {
+                                ai_lines.iter().enumerate()
+                                    .filter_map(|(i, l)| l.offset.map(|off| (i, off)))
+                                    .filter(|&(_, off)| off <= loc)
+                                    .max_by_key(|&(_, off)| off)
+                                    .map(|(i, _)| i)
+                            }))
+                            .unwrap_or(self.bytecodes_scroll);
+                        ai_lines.get(target_idx).and_then(|l| l.offset).map(|o| o as u32)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(bci) = bci {
+                    self.comment_address = Some(bci);
+                    let existing = self.current_class.as_ref()
+                        .zip(self.current_method.as_ref())
+                        .and_then(|(cls, meth)| self.comments.get(&(cls.clone(), meth.clone(), bci)))
+                        .cloned()
+                        .unwrap_or_default();
+                    self.comment_input = existing;
+                    self.comment_cursor = self.comment_input.len();
+                    self.comment_open = true;
+                }
+            }
             // Open comment dialog at cursor line
             KeyCode::Char(';')
                 if self.focus == 0 && self.left_tab == LeftTab::Bytecodes =>
